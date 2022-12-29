@@ -82,7 +82,7 @@ void print_mat(gsl_matrix *m) {
     }
 }
 
-typedef struct iter_result {
+typedef struct {
     gsl_matrix *centroids;
     gsl_vector_uint *cluster_assignments;
 } iter_result;
@@ -114,9 +114,8 @@ void update(iter_result *state, gsl_matrix *data) {
     state->centroids = new_centroids;
 }
 
-double euclidean_dist(gsl_vector_view x, gsl_vector_view y) {
+inline double euclidean_dist(gsl_vector_view x, gsl_vector_view y, gsl_vector *res) {
     // TODO this can prob be done faster with blas
-    gsl_vector *res = gsl_vector_alloc(x.vector.size);
     gsl_vector_memcpy(res, &x.vector);
 
     // compute sum((a - b) ^ 2)- don't need sqrt because we only care about argmin
@@ -126,12 +125,14 @@ double euclidean_dist(gsl_vector_view x, gsl_vector_view y) {
 }
 
 void dist_to_centroids(gsl_matrix *data, gsl_matrix *centroids, gsl_matrix *dist, gsl_vector_uint *cluster_assignment) {
+    gsl_vector *temp = gsl_vector_alloc(data->size2);
+
     for (int i = 0; i < dist->size1; i++) // data
     {
         double closest_dist = DBL_MAX;
         for (int j = 0; j < dist->size2; j++) // centroids
         {
-            double d = euclidean_dist(gsl_matrix_row(data, i), gsl_matrix_row(centroids, j));
+            double d = euclidean_dist(gsl_matrix_row(data, i), gsl_matrix_row(centroids, j), temp);
             gsl_matrix_set(dist, i, j, d); // store dist to each centroid for debugging
             if (d < closest_dist) {
                 closest_dist = d;
