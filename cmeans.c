@@ -1,18 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <float.h>
 
 #include <gsl/gsl_matrix.h>
 #include <gsl/gsl_vector.h>
 #include <gsl/gsl_rng.h>
 
-#define K 3
-#define ROWS 1000
-#define COLS 40
-
 void dist_to_centroids(gsl_matrix *data, gsl_matrix *centroids, gsl_matrix *dist, gsl_vector_uint *cluster_assignment);
 
 gsl_rng *r; /* global generator */
+
+void cluster_impl(gsl_matrix *m, size_t k, uint8_t *outdata);
 
 void init_random() {
     const gsl_rng_type *T;
@@ -21,15 +20,15 @@ void init_random() {
     r = gsl_rng_alloc(T);
 }
 
-void generate_data(gsl_matrix *out) {
-    for (int i = 0; i < ROWS; i++) {
-        for (int j = 0; j < COLS; j++) {
+void generate_data(gsl_matrix *out, int k) {
+    for (int i = 0; i < out->size1; i++) {
+        for (int j = 0; j < out->size2; j++) {
             double val = gsl_rng_uniform_pos(r);
             // add some artificial offsets to one dimension to make sure there are 3 clear clusters
-            if (j == 0 && i < ROWS / K) {
+            if (j == 0 && i < out->size1 / k) {
                 val += 10;
             }
-            if (j == 0 && i > 2 * ROWS / K) {
+            if (j == 0 && i > 2 * out->size1 / k) {
                 val -= 10;
             }
             gsl_matrix_set(out, i, j, val);
@@ -38,7 +37,7 @@ void generate_data(gsl_matrix *out) {
 }
 
 // pick K random datapoints from the original data to be centroids- wikipedia says that's the Forgy algorithm
-gsl_vector_uint *init_centroids(int k, gsl_matrix *m) {
+gsl_vector_uint *init_centroids(size_t k, gsl_matrix *m) {
     gsl_vector_uint *indices = gsl_vector_uint_alloc(k);
     for (int i = 0; i < k; i++) {
         // TODO may contain duplicates!!!
@@ -46,9 +45,9 @@ gsl_vector_uint *init_centroids(int k, gsl_matrix *m) {
     }
 
     // TODO hardcode a perfect initialization to see if the algo converges
-    gsl_vector_uint_set(indices, 0, ROWS / 6);
-    gsl_vector_uint_set(indices, 1, ROWS / 2);
-    gsl_vector_uint_set(indices, 2, 5 * ROWS / 6);
+//    gsl_vector_uint_set(indices, 0, m->size1 / 6);
+//    gsl_vector_uint_set(indices, 1, m->size1 / 2);
+//    gsl_vector_uint_set(indices, 2, 5 * m->size1 / 6);
     return indices;
 }
 
@@ -87,9 +86,9 @@ typedef struct {
     gsl_vector_uint *cluster_assignments;
 } iter_result;
 
-void update(iter_result *state, gsl_matrix *data) {
+void update(iter_result *state, gsl_matrix *data, int k) {
     // find the nearest centroid for each data point (row)
-    gsl_matrix *dist = gsl_matrix_alloc(ROWS, K);
+    gsl_matrix *dist = gsl_matrix_alloc(data->size1, k);
     gsl_matrix_set_all(dist, -1);
     dist_to_centroids(data, state->centroids, dist, state->cluster_assignments);
 
@@ -143,7 +142,7 @@ void dist_to_centroids(gsl_matrix *data, gsl_matrix *centroids, gsl_matrix *dist
 }
 
 void get_data_at(gsl_matrix *data, gsl_vector_uint *centroid_idx, gsl_matrix *centroids) {
-    for (int i = 0; i < K; i++) {
+    for (int i = 0; i < centroids->size1; i++) {
         // copy centroid indices
         gsl_vector_view row = gsl_matrix_row(data, gsl_vector_uint_get(centroid_idx, i));
 //        print_vec(&row.vector);
@@ -177,31 +176,56 @@ void write_state(iter_result state, gsl_matrix *m) {
     fclose(fp);
 }
 
-int main(void) {
+
+void cluster_impl(gsl_matrix *m, size_t k, uint8_t *outdata){
     init_random();
 
-    gsl_matrix *m = gsl_matrix_alloc(ROWS, COLS);
-    generate_data(m);
+    gsl_vector_uint *initial_centroid_idxs = init_centroids(k, m);
+    print_vec_uint(initial_centroid_idxs);
+   iter_result state;
 
-    gsl_vector_uint *initial_centroid_idxs = init_centroids(K, m);
+   gsl_vector_uint *cluster_assignment = gsl_vector_uint_alloc(m->size1);
+   print_vec_uint(cluster_assignment);
 
-    for(int iter = 0; iter < 20; iter++) {
-        gsl_vector_uint *cluster_assignment = gsl_vector_uint_alloc(ROWS);
+   gsl_matrix *centroids = gsl_matrix_alloc(k, m->size2);
+   get_data_at(m, initial_centroid_idxs, centroids);
+   print_mat(centroids);
 
-        gsl_matrix *centroids = gsl_matrix_alloc(K, COLS);
-        get_data_at(m, initial_centroid_idxs, centroids);
+   state.centroids = centroids;
+   state.cluster_assignments = cluster_assignment;
 
-        iter_result state;
-        state.centroids = centroids;
-        state.cluster_assignments = cluster_assignment;
+   for (int i = 0; i < 5; i++){ // TODO or until convergence
+       update(&state, m, k);
+       print_vec_uint(state.cluster_assignments);
+   }
+   write_state(state, m);
+   free(initial_centroid_idxs);
+    // TODO what else needs to be freed?
+   if(outdata) {
+       printf("Copy results to out array \n");
+       print_vec_uint(state.cluster_assignments);
+//       memcpy(outdata, state.cluster_assignments->data, m->size1 * sizeof(uint8_t));
+       for(int i =0; i < m->size1; i++){
+        outdata[i] = state.cluster_assignments->data[i];
+       }
+   }
+}
 
-        for (int i = 0; i < 5; i++) // TODO or until convergence
-        {
-            update(&state, m);
-//            print_vec_uint(state.cluster_assignments);
-        }
-    }
-//    write_state(state, m);
-    free(initial_centroid_idxs);
+
+void cluster(double *indatav, size_t rows, size_t cols, size_t k, uint8_t *outdatav)
+{
+    // https://stackoverflow.com/a/23954793/419338
+    gsl_matrix_view mv = gsl_matrix_view_array(indatav, rows, cols);
+    gsl_matrix *matrix = &(mv.matrix);
+    printf("matrix incoming\n");
+    print_mat(matrix);
+    printf("1xxx");
+    cluster_impl(matrix, k, outdatav);
+}
+
+int main(void) {
+    gsl_matrix *m = gsl_matrix_alloc(10, 3);
+    generate_data(m, 3);
+    cluster_impl(m, 3, NULL);
     return 0;
 }
